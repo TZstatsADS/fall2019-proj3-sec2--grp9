@@ -1,0 +1,319 @@
+---
+title: "Group 9 _Project 3: Predictive Modeling "
+author: "Chen Wang, Xin Gao, Kanyan Chen, Haoyu Zhang, Zack Abrams"
+date: "10/30/2019"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r message=FALSE}
+if(!require("EBImage")){
+  source("https://bioconductor.org/biocLite.R")
+  biocLite("EBImage")
+}
+if(!require("R.matlab")){
+  install.packages("R.matlab")
+}
+if(!require("readxl")){
+  install.packages("readxl")
+}
+
+if(!require("dplyr")){
+  install.packages("dplyr")
+}
+if(!require("readxl")){
+  install.packages("readxl")
+}
+
+if(!require("caret")){
+  install.packages("caret")
+}
+
+if(!require("xgboost")){
+  install.packages("xgboost")
+}
+
+if(!require("readr")){
+  install.packages("readr")
+}
+
+if(!require("stringr")){
+  install.packages("stringr")
+}
+
+if(!require("car")){
+  install.packages("car")
+}
+
+if(!require("kernlab")){
+  install.packages("kernlab")
+}
+
+if(!require("e1071")){
+  install.packages("e1071")
+}
+
+if(!require("gbm")){
+  install.packages("gbm")
+}
+
+if(!require("doParallel")){
+  install.packages("doParallel")
+}
+
+if(!require("h2o")){
+  install.packages("h2o")
+}
+
+if(!require("mlr")){
+  install.packages("mlr")
+}
+
+if(!require("randomForest")){
+  install.packages("randomForest")
+}
+
+library(kernlab)
+library(R.matlab)
+library(readxl)
+library(dplyr)
+library(EBImage)
+library(caret)
+library(xgboost)
+library(readr)
+library(stringr)
+library(car)
+library(e1071)
+library(gbm)
+library(h2o)
+library(mlr)
+library(randomForest)
+```
+
+### Step 0 set work directories, extract paths
+```{r wkdir}
+set.seed(0)
+setwd("/Users/Chen/Desktop/GR5243/fall2019-proj3-sec2--grp9/")
+```
+```{r, eval=FALSE}
+train_dir <- "../train_set/"
+train_image_dir <- paste(train_dir, "images/", sep="")
+train_pt_dir <- paste(train_dir,  "points/", sep="")
+train_label_path <- paste(train_dir, "label.csv", sep="") 
+```
+
+
+```{r,eval=FALSE}
+# this chunck is set to (eval = FALSE), where we construct our features from 6006 to 92
+info <- read.csv("../train_set/label.csv")
+info$emotion_idx = as.factor(info$emotion_idx)
+n <- nrow(info)
+n_train <- round(n*(4/5), 0)
+train_idx <- sample(info$Index, n_train, replace = F)
+test_idx <- setdiff(info$Index,train_idx)
+```
+
+```{r read fiducial points,eval=FALSE}
+readMat.matrix <- function(index){
+     return(round(readMat(paste0(train_pt_dir, sprintf("%04d", index), ".mat"))[[1]],0))
+}
+fiducial_pt_list <- lapply(1:2500, readMat.matrix)
+```
+# Step1 Feature Selection  
+
+```{r,eval=FALSE}
+# this chunck is set to (eval = FALSE), where we construct our features from 6006 to 92
+start.time <- Sys.time()
+xi = c(rep(1,8),rep(10,8),rep(25,7),rep(33,7),rep(37,14),rep(59,13),rep(37,8),rep(71,6),44,56,4,13,6,11)
+xj = c(2:9,11:18,19:24,26:32,34:36,38:58,60:67,75:78,68:70,72:74,52,71,25,33,39,49)
+xi = rep(xi,2)
+xj = rep(xj,2)
+xoy = c(rep(1,77),rep(2,77))
+df_label = data.frame(xi,xj,xoy)
+shape_matrix = matrix(nrow = 2500,ncol = 154)
+for(row in 1:2500){
+  for(k in 1:154){
+    shape_matrix[row,k] = fiducial_pt_list[row][[1]][df_label[k,1],df_label[k,3]] - fiducial_pt_list[row][[1]][df_label[k,2],df_label[k,3]]
+  }
+}
+```
+
+```{r, eval=FALSE}
+select_feature = c(1,5,9,11:14,17:20,25,26,34,36,38,40,44,45,49,50,52:55,57,67:69,72:77,79,80,84,87:89,94,95,97,98,100:102,104:107,112:120,122,123,125:134,136:154)
+end.time <- Sys.time()
+end.time - start.time
+train_X = shape_matrix[train_idx,select_feature]
+train_y = info$emotion_idx[train_idx]
+test_X = shape_matrix[test_idx,select_feature]
+test_y = info$emotion_idx[test_idx]
+dat_tr <- data.frame(train_X, train_y)
+dat_test <- data.frame(test_X, test_y)
+save(dat_tr, file="../output/train.RData")
+save(dat_test, file="../output/test.RData")
+
+```
+
+Since we used the same features for both the training and testing data, the feature selection time in total is 33.46879 seconds. 
+
+
+#Step2 Train and test a classification model with training features and responses
+##1. Baseline: GBM
+```{r}
+set.seed(0)
+load("../output/train.RData")
+load("../output/test.RData")
+train_X <- as.matrix(dat_tr[,-93])
+test_X <- as.matrix(dat_test[,-93])
+train_y <- dat_tr$train_y
+test_y <- dat_test$test_y
+
+tm.train <- system.time(mod_gbm <- gbm(train_y ~.,
+              data = dat_tr,
+              distribution = "multinomial",
+              cv.folds = 5,
+              shrinkage = 0.1,
+              n.minobsinnode = 10,
+              interaction.depth = 1,
+              n.trees = 200))
+
+tm.train
+
+#train on the training set 
+set.seed(0)
+pred.train <- predict.gbm(object = mod_gbm,
+                   newdata = dat_tr,
+                   n.trees = 200, 
+                   type = "response")
+emotion.train <- colnames(pred.train)[apply(pred.train,1,which.max)]
+accuracy.train <- sum(emotion.train == train_y)/2000
+accuracy.train
+
+set.seed(0)
+tm.test <-system.time(pred <- predict.gbm(object = mod_gbm,
+                   newdata = dat_test,
+                   n.trees = 200, 
+                   type = "response"))
+tm.test
+emotion.pred <- colnames(pred)[apply(pred, 1, which.max)]
+accuracy <- sum(emotion.pred==test_y)/500
+accuracy
+```
+
+The baseline model has the following results: for the training part, the user time is 11.249 seconds, with the training accuracy of 82.25%; for the testing part, the user time is 0.037 seconds, with the testing accuracy of 46.2%. 
+
+
+##2 Improved method: KSVM
+```{r}
+set.seed(0)
+tm.clf <- system.time(clf <- ksvm(train_X,
+               train_y,kernel="rbfdot",
+               kpar=list(sigma=0.0005),
+               cross=5,C = 50))
+tm.clf
+
+set.seed(0)
+tm.clf.test <- system.time(test <- predict(clf,test_X))
+tm.clf.test
+accuracy.ksvm <- sum(test==test_y)/500
+accuracy.ksvm
+```
+
+For the final improved method using SVM, the training user time is 8.779 seconds, the testing time is 0.744 seconds, and testing accuracy is 52%. 
+
+## 3. Random Forest (this is a method we tried, but not the final improved method we picked)
+```{r}
+# Random forest model: 
+
+traintask <- makeClassifTask(data = dat_tr,target = "train_y") 
+testtask <- makeClassifTask(data = dat_test,target = "test_y")
+rf.lrn <- makeLearner("classif.randomForest")
+rf.lrn$par.vals <- list(ntree = 100L, importance=TRUE)
+rdesc <- makeResampleDesc("CV",iters=5L)
+r <- resample(learner = rf.lrn, task = traintask, resampling = rdesc, measures = list(acc), show.info = T)
+params <- makeParamSet(makeIntegerParam("mtry",lower = 10,upper = 50),makeIntegerParam("nodesize",lower = 10,upper = 50))
+ctrl <- makeTuneControlRandom(maxit = 5L)
+#tune parameters 
+tune <- tuneParams(learner = rf.lrn, task = traintask, resampling = rdesc, measures = list(acc), par.set = params, control = ctrl, show.info = T) 
+#the best is mtry=36; nodesize=19 acc.test.mean=0.4240000
+
+#control <- trainControl(method="repeatedcv", number=10, repeats=3, search="grid")
+#set.seed(0)
+#metric <- "Accuracy"
+#tunegrid <- expand.grid(.mtry=c(20:50))
+#rf_gridsearch <- train(as.factor(train_y)~., data=dat_tr1, method="rf", metric=metric, tuneGrid=tunegrid, trControl=control)
+#print(rf_gridsearch)
+#plot(rf_gridsearch)
+
+
+
+
+model2 <- randomForest(as.factor(train_y) ~ ., data = dat_tr, ntree = 65, mtry = 30, importance = TRUE)
+model2
+
+predTrain<-predict(model2, data=dat_tr,type="class")
+sum(predTrain == dat_tr$train_y)/length(dat_tr$train_y)
+
+predValid <- predict(model2, dat_test, type = "class")
+sum(predValid == dat_test$test_y)/length(dat_test$test_y)
+
+rftime_train<- system.time(model2 <- randomForest(train_y ~ ., data = dat_tr, ntree = 70, mtry = 36, importance = TRUE))
+rftime_test<- system.time(predValid <- predict(model2, dat_test, type = "class"))
+rftime_train
+rftime_test
+
+
+
+```
+
+For the random forest method, the training time is 3.503 seconds, with the training accuracy of 39.65%. The testing time is 0.012 seconds, with the testing accuracy of 45.8%. (with the aggregated CV result of 42%)
+
+
+#test prediction in class
+
+```{r,eval=FALSE}
+test_dir <- "../test_set_sec2/"
+test_pt_dir <- paste(test_dir,  "points/", sep="")
+info.test <- read.csv("../test_set_sec2/labels_prediction.csv")
+
+readMat.matrix1 <- function(index){
+     return(round(readMat(paste0(test_pt_dir, sprintf("%04d", index), ".mat"))[[1]],0))
+}
+fiducial_pt_list1 <- lapply(1:2500, readMat.matrix1)
+
+xi = c(rep(1,8),rep(10,8),rep(25,7),rep(33,7),rep(37,14),rep(59,13),rep(37,8),rep(71,6),44,56,4,13,6,11)
+xj = c(2:9,11:18,19:24,26:32,34:36,38:58,60:67,75:78,68:70,72:74,52,71,25,33,39,49)
+xi = rep(xi,2)
+xj = rep(xj,2)
+xoy = c(rep(1,77),rep(2,77))
+df_label = data.frame(xi,xj,xoy)
+shape_matrix1 = matrix(nrow = 2500,ncol = 154)
+for(row in 1:2500){
+  for(k in 1:154){
+    shape_matrix1[row,k] = fiducial_pt_list1[row][[1]][df_label[k,1],df_label[k,3]] - fiducial_pt_list1[row][[1]][df_label[k,2],df_label[k,3]]
+  }
+}
+  
+select_feature = c(1,5,9,11:14,17:20,25,26,34,36,38,40,44,45,49,50,52:55,57,67:69,72:77,79,80,84,87:89,94,95,97,98,100:102,104:107,112:120,122,123,125:134,136:154)
+test_X = shape_matrix1[,select_feature]
+
+set.seed(0)
+tm.clf.test.test <- system.time(test1 <- predict(clf,test_X))
+tm.clf.test.test
+
+
+set.seed(0)
+test_X.df <- data.frame(test_X)
+tm.test <-system.time(pred.test <- predict.gbm(object = mod_gbm,
+                   newdata = test_X.df,
+                   n.trees = 200, 
+                   type = "response"))
+tm.test
+emotion.pred.test <- colnames(pred.test)[apply(pred.test, 1, which.max)]
+
+index.test <- info.test[,1]
+final <- cbind(index.test,test1,emotion.pred.test)
+colnames(final) <- c("Index","Baseline","Advanced")
+write.csv(final,file = "labels_prediction_grp9.csv",row.names = FALSE)
+```
